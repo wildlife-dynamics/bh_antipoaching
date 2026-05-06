@@ -189,7 +189,7 @@ case1:
 #         - url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 #           opacity: 0.5
 #           max_zoom: 17
-#           min_zoom: null  
+#           min_zoom: null
 
 
 # with-attachments:
