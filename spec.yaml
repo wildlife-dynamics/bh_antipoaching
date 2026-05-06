@@ -1,12 +1,2052 @@
-id:  # Unique workflow identifier (kebab-case)
-requirements: # Package dependencies with channels
+id: bh_antipoaching
+
+requirements:
   - name: ecoscope-workflows-core
-    version: "0.18.0"
+    version: ">=0.19.4"
     channel: https://repo.prefix.dev/ecoscope-workflows/
 
-# List of tasks in execution order
+  - name: ecoscope-workflows-ext-ecoscope
+    version: ">=0.19.4"
+    channel: https://repo.prefix.dev/ecoscope-workflows/
+
+  - name: ecoscope-workflows-ext-custom
+    version: "0.0.28.*"
+    channel: https://repo.prefix.dev/ecoscope-workflows-custom/
+
+  - name: ecoscope-workflows-ext-ste
+    version: "0.0.18.*"
+    channel: https://repo.prefix.dev/ecoscope-workflows-custom/
+
+  - name: ecoscope-workflows-ext-bahari-hai
+    version: "0.0.17.*"
+    channel: https://repo.prefix.dev/ecoscope-workflows-custom/
+
+  - name: pandas
+    version: ">=1.5.0"
+    channel: conda-forge
+
+  - name: pandera
+    version: "0.26.0"
+    channel: conda-forge
+
+  - name: geopandas
+    version: ">=0.13.0"
+    channel: conda-forge
+
+  - name: fiona
+    version: ">=1.9.0"
+    channel: conda-forge
+
+rjsf-overrides:
+  $defs:
+    ValueGrouper.properties.index_name.oneOf:
+      - const: Year
+        title: Year
+      - const: Month
+        title: Month
+      - const: Quarter
+        title: Quarter
+    # Lock grouper type to ValueGrouper only — prevents desktop UI
+    # from offering TemporalGrouper which would look for a non-existent column
+    Grouper.oneOf:
+      - $ref: '#/$defs/ValueGrouper'
+
 workflow:
-  - name:  # Display name used for the configuration form UI
-    description:  # Description used for the configuration form
-    id:  # Unique task identifier (snake_case)
-    task:  # Function name from task library
+
+  - name: Set Workflow Details
+    id: workflow_details
+    task: set_workflow_details
+
+  - name: Define analysis time range
+    id: time_range
+    task: set_time_range
+
+  # ── Inputs ────────────────────────────────────────────────
+  - name: CSV input
+    id: csv_input
+    task: fetch_and_persist_file
+    partial:
+      url: https://raw.githubusercontent.com/wildlife-dynamics/wt-bh-village-games/ae1f5bfb247c0bdde169caaaaf4e5c96cafb6b75/data/patrol_findings_with_village.csv
+      output_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      unzip: false
+      retries: 3
+      overwrite_existing: false
+
+  - name: Load bh data from CSV
+    id: load_data
+    task: load_df
+    partial:
+      file_path: ${{ workflow.csv_input.return }}
+      layer: landDx_polygons
+      deserialize_json: false
+
+  - name: Marine layers path
+    id: marine_layers_input
+    task: fetch_and_persist_file
+    partial:
+      url: https://drive.google.com/uc?export=download&id=1pNu0xS9lMN-O4SPpSiBihYcUTOGwN5_H
+      output_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      unzip: true
+      retries: 3
+      overwrite_existing: false
+
+  - name: Report template path
+    id: report_template_input
+    task: fetch_and_persist_file
+    partial:
+      url: https://docs.google.com/document/d/1qqy2OdAL_RJirep78TlCOBxHL4e6W--5/export?format=docx
+      output_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      unzip: false
+      retries: 3
+      overwrite_existing: false
+
+  # ── Data preparation ──────────────────────────────────────
+  - name: Clean and prepare patrol data
+    id: clean_data
+    task: clean_dataframe
+    partial:
+      data: ${{ workflow.load_data.return }}
+      date_columns:
+        - "Patrol Start Date"
+        - "Waypoint Date"
+      date_format: "%d-%b-%y"
+      groupby_period:
+        - "Year"
+        - "Month"
+        - "Quarter"
+      numeric_columns:
+        - "X"
+        - "Y"
+      drop_duplicates: false
+
+  # ── Groupers & split ──────────────────────────────────────
+  # groupers drives the dashboard filter selector (Year / Month / Quarter).
+  # split_data produces one (filter_key, dataframe) pair per group and is
+  # fed to tasks whose dashboard widget should respond to that selector.
+  - name: Define temporal groupers
+    id: groupers
+    task: set_groupers
+
+  - name: Split data into temporal groups
+    id: split_data
+    task: split_groups
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+
+  # ════════════════════════════════════════════════════════════
+  # SECTION 1 — PATROL SUMMARIES  (partial only — all-time data)
+  # ════════════════════════════════════════════════════════════
+
+  - name: Summarize patrols by year
+    id: patrol_summaries_by_year
+    task: summarize_patrols
+    partial:
+      df: ${{ workflow.clean_data.return }}
+
+  - name: Create multi-year patrol summary table
+    id: patrol_summary_table
+    task: draw_table
+    partial:
+      dataframe: ${{ workflow.patrol_summaries_by_year.return }}
+      columns:
+        - "Year"
+        - "patrols"
+        - "hours"
+        - "incidents"
+      widget_id: Patrol summaries
+      table_config:
+        enable_sorting: true
+        enable_filtering: false
+        enable_download: false
+        hide_header: false
+
+  - name: Persist patrol summary table HTML
+    id: persist_patrol_summary_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: patrol_summary
+      text: ${{ workflow.patrol_summary_table.return }}
+
+  - name: Convert patrol summary table HTML to PNG
+    id: html_to_png_patrol_summary
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_patrol_summary_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1200
+        # height: 700
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create patrol summary widget
+    id: patrol_summary_widget
+    task: create_table_widget_single_view
+    partial:
+      title: Patrol summaries
+      data: ${{ workflow.persist_patrol_summary_html.return }}
+
+  # ── Patrols per year line chart ───────────────────────────
+  - name: Draw patrols per year chart
+    id: patrols_line_chart
+    task: draw_line_chart
+    partial:
+      dataframe: ${{ workflow.patrol_summaries_by_year.return }}
+      x_column: Year
+      y_column: patrols
+      category_column: null
+      widget_id: Patrols per Year
+      smoothing: null
+      layout_kwargs:
+        title: "Number of Patrols per Year"
+        title_x: 0.5
+        font_size: 12.0
+        font_color: black
+        font_family: Arial
+        # height: 750
+        # width: 1400
+        yaxis:
+          title: Number of Patrols
+          tick_font_size: 8
+          title_font_size: 10
+        xaxis:
+          title: Year
+          tick_font_size: 8
+          title_font_size: 10
+          tickmode: linear
+          dtick: 1
+        margin:
+          t: 120
+          b: 80
+          l: 80
+          r: 40
+      line_kwargs:
+        color: "#2c3e50"
+        width: 3
+        shape: linear
+        show_markers: true
+
+
+  - name: Persist patrols chart HTML
+    id: persist_patrols_chart_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: patrols_per_year
+      text: ${{ workflow.patrols_line_chart.return }}
+
+  - name: Convert patrols chart HTML to PNG
+    id: html_to_png_patrols_chart
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_patrols_chart_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1200
+        # height: 700
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create patrols chart widget
+    id: patrols_chart_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Patrols per Year
+      data: ${{ workflow.persist_patrols_chart_html.return }}
+
+  # ── Patrol hours per year line chart ─────────────────────
+  - name: Draw patrol hours per year chart
+    id: hours_line_chart
+    task: draw_line_chart
+    partial:
+      dataframe: ${{ workflow.patrol_summaries_by_year.return }}
+      x_column: Year
+      y_column: hours
+      category_column: null
+      widget_id: Patrol Hours per Year
+      smoothing: null
+      layout_kwargs:
+        title: "Patrol Hours per Year"
+        title_x: 0.5
+        font_size: 12.0
+        font_color: black
+        font_family: Arial
+        # height: 750
+        # width: 1400
+        yaxis:
+          title: Patrol Hours
+          tick_font_size: 8
+          title_font_size: 10
+        xaxis:
+          title: Year
+          tick_font_size: 8
+          title_font_size: 10
+          tickmode: linear
+          dtick: 1
+        margin:
+          t: 120
+          b: 80
+          l: 80
+          r: 40
+      line_kwargs:
+        color: "#2c3e50"
+        width: 3
+        shape: linear
+        show_markers: true
+
+  - name: Persist hours chart HTML
+    id: persist_hours_chart_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: patrol_hours_per_year
+      text: ${{ workflow.hours_line_chart.return }}
+
+  - name: Convert hours chart HTML to PNG
+    id: html_to_png_hours_chart
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_hours_chart_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1200
+        # height: 700
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create hours chart widget
+    id: hours_chart_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Patrol Hours per Year
+      data: ${{ workflow.persist_hours_chart_html.return }}
+
+  # ── Incidents per year line chart ─────────────────────────
+  - name: Draw incidents per year chart
+    id: incidents_line_chart
+    task: draw_line_chart
+    partial:
+      dataframe: ${{ workflow.patrol_summaries_by_year.return }}
+      x_column: Year
+      y_column: incidents
+      category_column: null
+      widget_id: Incidents per Year
+      smoothing: null
+      layout_kwargs:
+        title: "Number of Incidents per Year"
+        title_x: 0.5
+        font_size: 12
+        font_color: black
+        font_family: Arial
+        # height: 750
+        # width: 1400
+        yaxis:
+          title: Number of Incidents
+          tick_font_size: 8
+          title_font_size: 10
+        xaxis:
+          title: Year
+          tick_font_size: 8
+          title_font_size: 10
+          tickmode: linear
+          dtick: 1
+        margin:
+          t: 120
+          b: 80
+          l: 80
+          r: 40
+      line_kwargs:
+        color: "#2c3e50"
+        width: 3
+        shape: linear
+        show_markers: true
+        smoothing: false
+
+  - name: Persist incidents chart HTML
+    id: persist_incidents_chart_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: incidents_per_year
+      text: ${{ workflow.incidents_line_chart.return }}
+
+  - name: Convert incidents chart HTML to PNG
+    id: html_to_png_incidents_chart
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_incidents_chart_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create incidents chart widget
+    id: incidents_chart_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Incidents per Year
+      data: ${{ workflow.persist_incidents_chart_html.return }}
+
+  # ── Village summary table (partial — aggregates all time) ─
+  - name: Summarize patrols by village
+    id: village_summaries
+    task: summarize_by_village
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+
+  - name: Create village summary table
+    id: village_summary_table
+    task: draw_table
+    partial:
+      dataframe: ${{ workflow.village_summaries.return }}
+      columns:
+        - "Village"
+        - "Number Of Patrols"
+        - "Total Patrol Hours"
+        - "Mangrove Logging"
+        - "Poaching"
+        - "Illegal Fishing"
+        - "Damaging Coral"
+        - "Arrests"
+      widget_id: Village Patrol Summary
+      table_config:
+        enable_sorting: true
+        enable_filtering: false
+        enable_download: false
+        hide_header: false
+
+  - name: Persist village summary table HTML
+    id: persist_village_summary_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: village_summary
+      text: ${{ workflow.village_summary_table.return }}
+
+  - name: Convert village summary table HTML to PNG
+    id: html_to_png_village_summary
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_village_summary_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create village summary widget
+    id: village_summary_widget
+    task: create_table_widget_single_view
+    partial:
+      title: Village Patrol Summary
+      data: ${{ workflow.persist_village_summary_html.return }}
+
+  # ════════════════════════════════════════════════════════════
+  # SECTION 2 — PATROL EFFORT  (partial only — all-time data)
+  # ════════════════════════════════════════════════════════════
+
+  - name: Prepare patrol effort data
+    id: patrol_effort_data
+    task: prepare_pivot_summary
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+      pivot_column: "Patrol Transport Type"
+      value_column: "Patrol ID"
+      aggregation: "nunique"
+      multiplier: 8.0
+      pivot_values:
+        - "Boat"
+        - "Foot"
+        - "Vehicle"
+      station_column: "Station"
+      station_filter: "Sector"
+
+  - name: Draw patrol effort bar chart
+    id: patrol_effort_chart
+    task: draw_bar_chart
+    partial:
+      dataframe: ${{ workflow.patrol_effort_data.return }}
+      category: Year
+      bar_chart_configs:
+        - column: Boat
+          agg_func: sum
+          label: Boat
+        - column: Foot
+          agg_func: sum
+          label: Foot
+        - column: Vehicle
+          agg_func: sum
+          label: Vehicle
+      layout_kwargs:
+        title: Patrol Effort by Transport Type
+        title_x: 0.5
+        font_size: 12
+        font_color: black
+        font_family: Arial
+        # height: 750
+        # width: 1400
+        yaxis:
+          title: Patrol Hours
+          tick_font_size: 8
+          title_font_size: 10
+        xaxis:
+          title: Period
+          tick_font_size: 8
+          title_font_size: 10
+      widget_id: Patrol Effort by Transport Type
+
+  - name: Persist patrol effort chart HTML
+    id: persist_patrol_effort_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: patrol_effort
+      text: ${{ workflow.patrol_effort_chart.return }}
+
+  - name: Convert patrol effort chart HTML to PNG
+    id: html_to_png_patrol_effort_chart
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_patrol_effort_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create patrol effort widget
+    id: patrol_effort_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Patrol Effort by Transport Type
+      data: ${{ workflow.persist_patrol_effort_html.return }}
+
+  # ── Patrol transport summary charts ──────────────────────
+  - name: Prepare patrol transport summary data
+    id: patrol_transport_data
+    task: prepare_grouped_summary
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+      group_column: "Patrol Transport Type"
+      aggregations:
+        Patrol Count: "Patrol ID:nunique"
+      derived_columns:
+        Patrol Hours: "Patrol Count * 8.0"
+      group_values:
+        - "Boat"
+        - "Foot"
+        - "Vehicle"
+      station_column: "Station"
+      station_filter: "Sector"
+      most_recent_period_only: false
+
+  - name: Draw patrol count by transport type chart
+    id: patrol_transport_count_chart
+    task: draw_bar_chart
+    partial:
+      dataframe: ${{ workflow.patrol_transport_data.return }}
+      category: Patrol Transport Type
+      bar_chart_configs:
+        - column: Patrol Count
+          agg_func: sum
+          label: Count
+          text: Patrol Count
+          textposition: outside
+          textfont_size: 12
+      layout_kwargs:
+        title: "Number of Patrols by Transport Type"
+        title_x: 0.5
+        font_size: 12
+        font_color: black
+        font_family: Arial
+        # height: 700
+        # width: 1200
+        yaxis:
+          title: Number of Patrols
+          title_font_size: 10
+          tick_font_size: 8
+        xaxis:
+          title: Transport Type
+          title_font_size: 10
+          tick_font_size: 8
+        margin:
+          t: 140
+          b: 120
+          l: 100
+          r: 100
+      widget_id: Patrol Count by Transport Type
+
+  - name: Persist patrol count transport chart HTML
+    id: persist_transport_count_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: transport_patrol_count
+      text: ${{ workflow.patrol_transport_count_chart.return }}
+
+  - name: Convert patrol count transport chart HTML to PNG
+    id: png_transport_count_chart
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_transport_count_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create patrol count transport widget
+    id: patrol_transport_count_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Patrol Count by Transport Type
+      data: ${{ workflow.persist_transport_count_html.return }}
+
+  - name: Draw patrol hours by transport type chart
+    id: patrol_transport_hours_chart
+    task: draw_bar_chart
+    partial:
+      dataframe: ${{ workflow.patrol_transport_data.return }}
+      category: Patrol Transport Type
+      bar_chart_configs:
+        - column: Patrol Hours
+          agg_func: sum
+          label: Hours
+          text: Patrol Hours
+          textposition: outside
+          textfont_size: 12
+      layout_kwargs:
+        title: "Number of patrol hours by transport type"
+        title_x: 0.5
+        font_size: 12
+        font_color: black
+        font_family: Arial
+        # height: 700
+        # width: 1200
+        yaxis:
+          title: Patrol Hours
+          title_font_size: 10
+          tick_font_size: 8
+        xaxis:
+          title: Transport Type
+          title_font_size: 10
+          tick_font_size: 8
+        margin:
+          t: 140
+          b: 120
+          l: 100
+          r: 100
+      widget_id: Patrol Hours by Transport Type
+
+  - name: Persist patrol hours transport chart HTML
+    id: persist_transport_hours_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: transport_patrol_hours
+      text: ${{ workflow.patrol_transport_hours_chart.return }}
+
+  - name: Convert patrol hours transport chart HTML to PNG
+    id: png_transport_hours_chart
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_transport_hours_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create patrol hours transport widget
+    id: patrol_transport_hours_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Patrol Hours by Transport Type
+      data: ${{ workflow.persist_transport_hours_html.return }}
+
+  # ════════════════════════════════════════════════════════════
+  # SECTION 3 — ILLEGAL ACTIVITY  (partial — all-time summary)
+  # ════════════════════════════════════════════════════════════
+
+  - name: Draw illegal activity summary
+    id: illegal_activity_summary
+    task: draw_summary_dashboard
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+      category_column: "Observation Category 0"
+      categories:
+        - "Mangrove Logging"
+        - "Poaching"
+        - "Arrests"
+        - "Damaging Coral"
+        - "Illegal Fishing"
+      filter_column: "Station"
+      filter_value: "Sector"
+      sum_columns:
+        Poached Turtle Sum: "Sum"
+      chart_title: "Illegal Activity Summary"
+      n_cols: 3
+      widget_id: Illegal Activity Summary
+
+  - name: Persist illegal activity summary HTML
+    id: persist_illegal_activity_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: illegal_activity_summary
+      text: ${{ workflow.illegal_activity_summary.return }}
+
+  - name: Convert illegal activity summary HTML to PNG
+    id: html_to_png_illegal_activity
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_illegal_activity_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 800
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create illegal activity summary widget
+    id: illegal_activity_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Illegal Activity Summary
+      data: ${{ workflow.persist_illegal_activity_html.return }}
+
+  # ── Illegal activity donut chart  (mapvalues — groups by grouper) ─
+  - name: Draw illegal activity donut chart
+    id: illegal_activity_donut
+    task: draw_donut_chart
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      category_column: "Observation Category 0"
+      categories:
+        - "Mangrove Logging"
+        - "Poaching"
+        - "Arrests"
+      filter_column: "Station"
+      filter_value: "Sector"
+      sum_columns:
+        Poached Turtle Sum: "Sum"
+      chart_title: "Illegal Activities Summary"
+      hole: 0.4
+      plot_style:
+        marker_colors:
+          - "#1f77b4"
+          - "#2ca02c"
+          - "#ff7f0e"
+          - "#d62728"
+          - "#9467bd"
+          - "#8c564b"
+      layout_style:
+        showlegend: true
+        font_size: 8
+        title_x: 0.5
+        font_family: Arial
+        font_color: black
+      widget_id: Illegal Activities Donut
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist illegal activity donut HTML
+    id: persist_illegal_donut_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: illegal_activity_donut
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.illegal_activity_donut.return }}
+
+  - name: Convert illegal activity donut HTML to PNG
+    id: png_illegal_donut
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 900
+        # height: 700
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_illegal_donut_html.return }}
+
+  - name: Create illegal activity donut widget
+    id: illegal_activity_donut_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Illegal Activities Donut
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_illegal_donut_html.return }}
+
+  # ════════════════════════════════════════════════════════════
+  # SECTION 4 — EVIDENCE BREAKDOWN  (partial — all-time)
+  # ════════════════════════════════════════════════════════════
+
+  # ── Mangrove logging evidence ─────────────────────────────
+  - name: Prepare mangrove logging evidence data
+    id: mangrove_evidence_data
+    task: prepare_category_counts
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+      count_column: "Evidence"
+      filter_column: "Observation Category 0"
+      filter_value: "mangrove logging"
+      station_column: "Station"
+      station_filter: "Sector"
+      exclude_values: null
+
+  - name: Draw mangrove logging evidence chart
+    id: mangrove_evidence_chart
+    task: draw_bar_chart
+    partial:
+      dataframe: ${{ workflow.mangrove_evidence_data.return }}
+      category: category
+      bar_chart_configs:
+        - column: count
+          agg_func: sum
+          label: Count
+          text: count
+          textposition: outside
+          textfont_size: 8
+      layout_kwargs:
+        title: Mangrove Logging Evidence
+        title_x: 0.5
+        title_y: 0.95
+        font_size: 12
+        font_color: black
+        # height: 800
+        # width: 1400
+        margin:
+          t: 140
+          b: 120
+        yaxis:
+          title: Count
+          title_font_size: 10
+        xaxis:
+          title_font_size: 10
+          tickangle: 45
+      widget_id: Mangrove Logging Evidence
+
+  - name: Persist mangrove evidence chart HTML
+    id: persist_mangrove_evidence_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: mangrove_logging_evidence
+      text: ${{ workflow.mangrove_evidence_chart.return }}
+
+  - name: Convert mangrove evidence chart HTML to PNG
+    id: png_mangrove_evidence
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_mangrove_evidence_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+          # width: 1280
+          # height: 720
+        full_page: true
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create mangrove evidence widget
+    id: mangrove_evidence_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Mangrove Logging Evidence
+      data: ${{ workflow.persist_mangrove_evidence_html.return }}
+
+  # ── Poaching evidence ─────────────────────────────────────
+  - name: Prepare poaching evidence data
+    id: poaching_evidence_data
+    task: prepare_category_counts
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+      count_column: "Evidence"
+      filter_column: "Observation Category 0"
+      filter_value: "poaching"
+      station_column: "Station"
+      station_filter: "Sector"
+      exclude_values: null
+
+  - name: Draw poaching evidence chart
+    id: poaching_evidence_chart
+    task: draw_bar_chart
+    partial:
+      dataframe: ${{ workflow.poaching_evidence_data.return }}
+      category: category
+      bar_chart_configs:
+        - column: count
+          agg_func: sum
+          label: Count
+          text: count
+          textposition: outside
+          textfont_size: 10
+      layout_kwargs:
+        title: Poaching Evidence
+        title_x: 0.5
+        title_y: 0.95
+        font_size: 12
+        font_color: black
+        # height: 800
+        # width: 1400
+        margin:
+          t: 140
+          b: 120
+        yaxis:
+          title: Count
+          title_font_size: 10
+        xaxis:
+          title_font_size: 10
+          tickangle: 45
+      widget_id: Poaching Evidence
+
+  - name: Persist poaching evidence chart HTML
+    id: persist_poaching_evidence_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: poaching_evidence
+      text: ${{ workflow.poaching_evidence_chart.return }}
+
+  - name: Convert poaching evidence chart HTML to PNG
+    id: png_poaching_evidence
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_poaching_evidence_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create poaching evidence widget
+    id: poaching_evidence_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Poaching Evidence
+      data: ${{ workflow.persist_poaching_evidence_html.return }}
+
+  # ── Illegal fishing gear ──────────────────────────────────
+  - name: Prepare illegal fishing gear data
+    id: fishing_gear_data
+    task: prepare_category_counts
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+      count_column: "Observation"
+      filter_column: "Resource Use Type"
+      filter_value: "illegal use"
+      exclude_values:
+        - "handline"
+        - "unknown"
+      station_column: "Station"
+      station_filter: "Sector"
+
+  - name: Draw illegal fishing gear chart
+    id: fishing_gear_chart
+    task: draw_bar_chart
+    partial:
+      dataframe: ${{ workflow.fishing_gear_data.return }}
+      category: category
+      bar_chart_configs:
+        - column: count
+          agg_func: sum
+          label: Count
+          text: count
+          textposition: outside
+          textfont_size: 10
+      layout_kwargs:
+        title: Illegal Fishing Gear
+        title_x: 0.5
+        title_y: 0.95
+        font_size: 12
+        font_color: black
+        # height: 800
+        # width: 1400
+        margin:
+          t: 140
+          b: 120
+        yaxis:
+          title: Count
+          title_font_size: 10
+        xaxis:
+          title_font_size: 10
+          tickangle: 45
+      widget_id: Illegal Fishing Gear
+
+  - name: Persist fishing gear chart HTML
+    id: persist_fishing_gear_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: illegal_fishing_gear
+      text: ${{ workflow.fishing_gear_chart.return }}
+
+  - name: Convert fishing gear chart HTML to PNG
+    id: html_to_png_fishing_gear_chart
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_fishing_gear_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create fishing gear widget
+    id: fishing_gear_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Illegal Fishing Gear
+      data: ${{ workflow.persist_fishing_gear_html.return }}
+
+  # ════════════════════════════════════════════════════════════
+  # SECTION 5 — SECTOR & VILLAGE CHARTS  (mapvalues — grouper-driven)
+  # ════════════════════════════════════════════════════════════
+
+  # ── Illegal events by sector stacked bar ─────────────────
+  - name: Draw illegal events by sector chart
+    id: illegal_events_by_sector
+    task: draw_stacked_bar_chart
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      group_column: "Station"
+      category_column: "Observation Category 0"
+      match_values:
+        - "mangrove logging"
+        - "poaching"
+        - "arrests"
+        - "poached turtle sum"
+
+      pivot_on: group
+      date_column: null
+      top_n: null
+      exclude_values: null
+      colors: null
+
+      remap_column: "Resource Use Type"
+      remap_value: "illegal use"
+      remap_label: "illegal fishing"
+      filter_column: "Station"
+      filter_value: "Sector"
+      group_order:
+        - "Sector 1"
+        - "Sector 2"
+        - "Sector 3"
+        - "Sector 4"
+        - "Sector 5"
+        - "Sector 6"
+        - "Sector 7"
+        - "Sector 8"
+        - "Sector 9"
+        - "Sector 10"
+        - "Sector 11"
+        - "Sector 12"
+        - "Sector 13"
+      chart_title: "Illegal Events by Sector and Activity Type"
+      x_axis_label: "Sector"
+      y_axis_label: "Number of Illegal Events"
+      widget_id: Illegal Events by Sector
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist illegal events by sector HTML
+    id: persist_illegal_sector_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: illegal_events_by_sector
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.illegal_events_by_sector.return }}
+
+  - name: Convert illegal events by sector HTML to PNG
+    id: png_illegal_sector
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 700
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_illegal_sector_html.return }}
+
+  - name: Create illegal events by sector widget
+    id: illegal_events_sector_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Illegal Events by Sector
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_illegal_sector_html.return }}
+
+  # ── Village proportional bar chart ───────────────────────
+  - name: Draw village proportional chart
+    id: village_proportional_chart
+    task: draw_proportional_bar_chart
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      group_column: "Village"
+      metrics:
+        - label: "Number of Patrols"
+          column: "Patrol ID"
+          aggregation: "nunique"
+        - label: "Patrol Hours"
+          column: "Patrol ID"
+          aggregation: "nunique"
+        - label: "Total Events"
+          column: "Observation Category 0"
+          aggregation: "count"
+      chart_title: "Per Village Patrol Proportions"
+      widget_id: Village Patrol Proportions
+      filter_column: null       # ← hides from UI
+      filter_value: null        # ← hides from UI
+      colors: null         # ← uses default color sequence
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist village proportional chart HTML
+    id: persist_village_prop_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: village_proportional
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.village_proportional_chart.return }}
+
+  - name: Convert village proportional chart HTML to PNG
+    id: html_to_png_village_proportional
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 750
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_village_prop_html.return }}
+
+  - name: Create village proportional widget
+    id: village_proportional_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Village Patrol Proportions
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_village_prop_html.return }}
+
+  # ── Arrests by village (partial — most-recent-period logic is internal) ─
+  - name: Prepare arrests by village data
+    id: arrests_by_village_data
+    task: prepare_grouped_summary
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+      group_column: "Village"
+      aggregations:
+        Arrest_Count: "Observation Category 0:count"   # ← indented 2 more spaces
+      most_recent_period_only: false
+      derived_columns: null     # ← hides from UI
+      group_values: null        # ← hides from UI
+      station_column: null      # ← hides from UI
+      station_filter: null      # ← hides from UI
+
+  - name: Draw arrests by village chart
+    id: arrests_by_village_chart
+    task: draw_bar_chart
+    partial:
+      dataframe: ${{ workflow.arrests_by_village_data.return }}
+      category: Village
+      bar_chart_configs:
+        - column: Arrest_Count
+          agg_func: sum
+          label: Arrests
+          text: Arrest_Count
+          textposition: outside
+          textfont_size: 10
+      layout_kwargs:
+        title: Number of Arrests by Village
+        title_x: 0.5
+        font_size: 12
+        font_color: black
+        # height: 600
+        # width: 1100
+        yaxis:
+          title: Number of Arrests
+          title_font_size: 10
+        xaxis:
+          title: Village
+          title_font_size: 10
+      widget_id: Arrests by Village
+
+  - name: Persist arrests by village HTML
+    id: persist_arrests_village_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: arrests_by_village
+      text: ${{ workflow.arrests_by_village_chart.return }}
+
+  - name: Convert arrests by village HTML to PNG
+    id: png_arrests_village
+    task: html_to_png
+    partial:
+      html_path: ${{ workflow.persist_arrests_village_html.return }}
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+          # width: 1280
+          # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+
+  - name: Create arrests by village widget
+    id: arrests_village_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Arrests by Village
+      data: ${{ workflow.persist_arrests_village_html.return }}
+
+  # ── Top 5 villages by category (mapvalues) ───────────────
+  - name: Draw top villages by category chart
+    id: top_villages_category_chart
+    task: draw_stacked_bar_chart
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      group_column: "Village"
+      category_column: "Observation Category 0"
+      match_values:
+        - "mangrove logging"
+        - "poaching"
+        - "poached turtle"
+      remap_column: "Resource Use Type"
+      remap_value: "illegal use"
+      remap_label: "illegal fishing"
+      top_n: 5
+      chart_title: "Top 5 Villages: Illegal Activities by Category"
+      x_axis_label: "Illegal Activity Category"
+      y_axis_label: "Number of Illegal Events"
+      widget_id: Top 5 Villages by Category
+      pivot_on: "category"      # ← locks value and hides from UI
+      date_column: null         # ← hides from UI
+      group_order: null         # ← hides from UI
+      exclude_values: null      # ← hides from UI
+      filter_column: null       # ← hides from UI
+      filter_value: null        # ← hides from UI
+      colors: null              # ← hides from UI
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist top villages category HTML
+    id: persist_top_villages_cat_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: top_villages_by_category
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.top_villages_category_chart.return }}
+
+  - name: Convert top villages category chart HTML to PNG
+    id: png_top_villages_cat
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_top_villages_cat_html.return }}
+
+  - name: Create top villages category widget
+    id: top_villages_category_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Top 5 Villages by Category
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_top_villages_cat_html.return }}
+
+  # ── Top 5 villages monthly trend (mapvalues) ─────────────
+  - name: Draw top villages monthly trend chart
+    id: top_villages_monthly_chart
+    task: draw_stacked_bar_chart
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      group_column: "Village"
+      category_column: "Observation Category 0"
+      match_values:
+        - "mangrove logging"
+        - "poaching"
+        - "poached turtle"
+      remap_column: "Resource Use Type"
+      remap_value: "illegal use"
+      remap_label: "illegal fishing"
+      top_n: 5
+      pivot_on: "month"
+      date_column: "Patrol Start Date"
+      chart_title: "Top 5 Villages: Illegal Activities Monthly Trend"
+      x_axis_label: "Month"
+      y_axis_label: "Number of Illegal Events"
+      widget_id: Top 5 Villages Monthly Trend
+      group_order: null         # ← hides from UI
+      exclude_values: null      # ← hides from UI
+      filter_column: null       # ← hides from UI
+      filter_value: null        # ← hides from UI
+      colors: null              # ← hides from UI
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist top villages monthly HTML
+    id: persist_top_villages_month_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: top_villages_monthly_trend
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.top_villages_monthly_chart.return }}
+
+  - name: Convert top villages monthly chart HTML to PNG
+    id: png_top_villages_month
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_top_villages_month_html.return }}
+
+  - name: Create top villages monthly widget
+    id: top_villages_monthly_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Top 5 Villages Monthly Trend
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_top_villages_month_html.return }}
+
+  # ── Village monthly timeseries (mapvalues) ────────────────
+  - name: Draw village monthly timeseries chart
+    id: village_monthly_timeseries_chart
+    task: draw_stacked_bar_chart
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      group_column: "Village"
+      category_column: "Observation Category 0"
+      match_values:
+        - "mangrove logging"
+        - "poaching"
+        - "arrests"
+        - "poached turtle sum"
+      remap_column: "Resource Use Type"
+      remap_value: "illegal use"
+      remap_label: "illegal fishing"
+      pivot_on: "month"
+      date_column: "Patrol Start Date"
+      top_n: 5
+      chart_title: "Monthly Illegal Activities per Village"
+      x_axis_label: "Month"
+      y_axis_label: "Number of Events"
+      widget_id: Village Monthly Illegal Activities
+      group_order: null         # ← hides from UI
+      exclude_values: null      # ← hides from UI
+      filter_column: null       # ← hides from UI
+      filter_value: null        # ← hides from UI
+      colors: null              # ← hides from UI
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist village monthly timeseries HTML
+    id: persist_village_monthly_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: village_monthly_timeseries
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.village_monthly_timeseries_chart.return }}
+
+  - name: Convert village monthly timeseries chart HTML to PNG
+    id: png_village_month
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1280
+        # height: 720
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 1000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_village_monthly_html.return }}
+
+  - name: Create village monthly timeseries widget
+    id: village_monthly_widget
+    task: create_plot_widget_single_view
+    partial:
+      title: Village Monthly Illegal Activities
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_village_monthly_html.return }}
+
+  # ════════════════════════════════════════════════════════════
+  # SECTION 6 — MAPS  (mapvalues — grouper-driven)
+  # ════════════════════════════════════════════════════════════
+
+  # ── Illegal events hotspot map ────────────────────────────
+  - name: Draw illegal events hotspot map
+    id: illegal_events_map
+    task: draw_illegal_events_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Illegal Events Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist illegal events map HTML
+    id: persist_illegal_events_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: illegal_events_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.illegal_events_map.return }}
+
+  - name: Convert illegal events map HTML to PNG
+    id: html_to_png_illegal_events_map
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_illegal_events_html.return }}
+
+  - name: Create illegal events map widget
+    id: illegal_events_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Illegal Events Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_illegal_events_html.return }}
+
+  # ── Weighted patrol effort map ────────────────────────────
+  - name: Draw weighted patrol effort map
+    id: weighted_effort_map
+    task: draw_weighted_effort_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Weighted Patrol Effort Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist weighted effort map HTML
+    id: persist_weighted_effort_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: weighted_effort_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.weighted_effort_map.return }}
+
+  - name: Convert weighted effort map HTML to PNG
+    id: html_to_png_weighted_effort_map
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_weighted_effort_html.return }}
+
+  - name: Create weighted effort map widget
+    id: weighted_effort_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Weighted Patrol Effort Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_weighted_effort_html.return }}
+
+  # ── Standardised event rate map ───────────────────────────
+  - name: Draw standardised event rate map
+    id: standardized_rate_map
+    task: draw_standardized_rate_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Standardised Event Rate Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist standardised rate map HTML
+    id: persist_standardized_rate_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: standardized_rate_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.standardized_rate_map.return }}
+
+  - name: Convert standardised rate map HTML to PNG
+    id: html_to_png_standardized_rate
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_standardized_rate_html.return }}
+
+  - name: Create standardised rate map widget
+    id: standardized_rate_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Standardised Event Rate Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_standardized_rate_html.return }}
+
+  # ── Ecograph patrol effort map ────────────────────────────
+  - name: Draw ecograph patrol effort map
+    id: ecograph_map
+    task: draw_ecograph_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Ecograph Patrol Effort Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist ecograph map HTML
+    id: persist_ecograph_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: ecograph_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.ecograph_map.return }}
+
+  - name: Convert ecograph map HTML to PNG
+    id: html_to_png_ecograph_map
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_ecograph_html.return }}
+
+  - name: Create ecograph map widget
+    id: ecograph_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Ecograph Patrol Effort Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_ecograph_html.return }}
+
+  # ── Mangrove logging hotspot map ──────────────────────────
+  - name: Draw mangrove logging hotspot map
+    id: mangrove_logging_map
+    task: draw_mangrove_logging_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Mangrove Logging Hotspot Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist mangrove logging map HTML
+    id: persist_mangrove_logging_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: mangrove_logging_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.mangrove_logging_map.return }}
+
+  - name: Convert mangrove logging map HTML to PNG
+    id: html_to_png_mangrove_logging
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_mangrove_logging_html.return }}
+
+  - name: Create mangrove logging map widget
+    id: mangrove_logging_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Mangrove Logging Hotspot Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_mangrove_logging_html.return }}
+
+  # ── Poaching hotspot map ──────────────────────────────────
+  - name: Draw poaching hotspot map
+    id: poaching_map
+    task: draw_poaching_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Poaching Hotspot Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist poaching map HTML
+    id: persist_poaching_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: poaching_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.poaching_map.return }}
+
+  - name: Convert poaching map HTML to PNG
+    id: html_to_png_poaching
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_poaching_html.return }}
+
+  - name: Create poaching map widget
+    id: poaching_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Poaching Hotspot Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_poaching_html.return }}
+
+  # ── Illegal fishing hotspot map ───────────────────────────
+  - name: Draw illegal fishing hotspot map
+    id: illegal_fishing_map
+    task: draw_illegal_fishing_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Illegal Fishing Hotspot Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist illegal fishing map HTML
+    id: persist_illegal_fishing_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: illegal_fishing_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.illegal_fishing_map.return }}
+
+  - name: Convert illegal fishing map HTML to PNG
+    id: html_to_png_illegal_fishing
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_illegal_fishing_html.return }}
+
+  - name: Create illegal fishing map widget
+    id: illegal_fishing_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Illegal Fishing Hotspot Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_illegal_fishing_html.return }}
+
+  # ── Arrests hotspot map ───────────────────────────────────
+  - name: Draw arrests hotspot map
+    id: arrests_map
+    task: draw_arrests_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Arrests Hotspot Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist arrests map HTML
+    id: persist_arrests_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: arrests_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.arrests_map.return }}
+
+  - name: Convert arrests map HTML to PNG
+    id: html_to_png_arrests
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_arrests_html.return }}
+
+  - name: Create arrests map widget
+    id: arrests_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Arrests Hotspot Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_arrests_html.return }}
+
+  # ── Poached turtles hotspot map ───────────────────────────
+  - name: Draw poached turtles hotspot map
+    id: poached_turtles_map
+    task: draw_poached_turtles_map
+    partial:
+      groupers: ${{ workflow.groupers.return }}
+      marine_layers_path: ${{ workflow.marine_layers_input.return }}
+      widget_id: Poached Turtles Hotspot Map
+    mapvalues:
+      argnames: df
+      argvalues: ${{ workflow.split_data.return }}
+
+  - name: Persist poached turtles map HTML
+    id: persist_poached_turtles_html
+    task: persist_text
+    partial:
+      root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      filename_suffix: poached_turtles_map
+    mapvalues:
+      argnames: text
+      argvalues: ${{ workflow.poached_turtles_map.return }}
+
+  - name: Convert poached turtles map HTML to PNG
+    id: html_to_png_poached_turtles
+    task: html_to_png
+    partial:
+      output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      config:
+        # width: 1400
+        # height: 900
+        full_page: false
+        device_scale_factor: 1.0
+        wait_for_timeout: 60000
+        timeout: 0
+        max_concurrent_pages: 1
+    mapvalues:
+      argnames: html_path
+      argvalues: ${{ workflow.persist_poached_turtles_html.return }}
+
+  - name: Create poached turtles map widget
+    id: poached_turtles_map_widget
+    task: create_map_widget_single_view
+    partial:
+      title: Poached Turtles Hotspot Map
+    mapvalues:
+      argnames: data
+      argvalues: ${{ workflow.persist_poached_turtles_html.return }}
+
+  # ════════════════════════════════════════════════════════════
+  # SECTION 7 — REPORT
+  # ════════════════════════════════════════════════════════════
+  # Report uses PNG outputs. For mapvalues tasks we take only the first
+  # PNG produced (the all-data group from the Year grouper) by wiring
+  # the html_to_png return directly — render_report receives a list and
+  # picks index 0 internally, or you can add a pick_first task if needed.
+
+  - name: Get report year
+    id: report_year
+    task: get_report_year
+    partial:
+      df: ${{ workflow.clean_data.return }}
+      groupers: ${{ workflow.groupers.return }}
+
+  - name: Get report generation date
+    id: report_generation_date
+    task: get_generation_date
+    partial: {}
+
+  - name: Render patrol summary report
+    id: render_patrol_report
+    task: render_report
+    partial:
+      template_path: ${{ workflow.report_template_input.return }}
+      output_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+      report_year: ${{ workflow.report_year.return }}
+      generation_date: ${{ workflow.report_generation_date.return }}
+
+      # ── Section 1: Patrol Summaries ──────────────────────
+      patrol_summary_table: ${{ workflow.html_to_png_patrol_summary.return }}
+      patrol_summary_line: ${{ workflow.html_to_png_patrols_chart.return }}
+      hours_line_chart: ${{ workflow.html_to_png_hours_chart.return }}
+      incidents_line_chart: ${{ workflow.html_to_png_incidents_chart.return }}
+      village_summary_table: ${{ workflow.html_to_png_village_summary.return }}
+      patrol_transport_summary: ${{ workflow.png_transport_count_chart.return }}
+      illegal_activities_summary_dashboard: ${{ workflow.html_to_png_illegal_activity.return }}
+      illegal_activities_doughnut: ${{ workflow.png_illegal_donut.return }}
+      illegal_evidence_text: "See charts below for breakdown of illegal activity evidence."
+      mangrove_evidence: ${{ workflow.png_mangrove_evidence.return }}
+      poaching_evidence: ${{ workflow.png_poaching_evidence.return }}
+      illegal_fishing_evidence: ${{ workflow.html_to_png_fishing_gear_chart.return }}
+
+      # ── Section 2: Community Feedback ────────────────────
+      village_stacked_bar: ${{ workflow.png_illegal_sector.return }}
+      arrests_by_village_bar: ${{ workflow.png_arrests_village.return }}
+
+      # ── Section 3: Visual Enhancement ────────────────────
+      horizontal_proportional_dashboard: ${{ workflow.html_to_png_village_proportional.return }}
+
+      # ── Section 4a: Illegal Activity Hotspot Maps ────────
+      all_illegal_hotspot: ${{ workflow.html_to_png_illegal_events_map.return }}
+      mangrove_logging_hotspot: ${{ workflow.html_to_png_mangrove_logging.return }}
+      poaching_hotspot: ${{ workflow.html_to_png_poaching.return }}
+      illegal_fishing_hotspot: ${{ workflow.html_to_png_illegal_fishing.return }}
+      arrests_hotspot: ${{ workflow.html_to_png_arrests.return }}
+      poached_turtles_hotspot: ${{ workflow.html_to_png_poached_turtles.return }}
+
+      # ── Section 4b: Patrol Effort Maps ───────────────────
+      weighted_effort_ecomap: ${{ workflow.html_to_png_weighted_effort_map.return }}
+      standardized_rate_ecomap: ${{ workflow.html_to_png_standardized_rate.return }}
+      ecograph_rate_ecomap: ${{ workflow.html_to_png_ecograph_map.return }}
+
+      # ── Section 5: Patrol Effort Charts ──────────────────
+      patrol_effort_stacked_bar: ${{ workflow.png_transport_hours_chart.return }}
+      patrol_effort_line: ${{ workflow.html_to_png_patrol_effort_chart.return }}
+
+      # ── Section 6: Comparison Features ───────────────────
+      top_villages_by_category: ${{ workflow.png_top_villages_cat.return }}
+      top_villages_monthly_trend: ${{ workflow.png_top_villages_month.return }}
+
+      # ── Section 7: Violations Over Time ──────────────────
+      violations_over_time_note: "Monthly illegal activity charts generated per village for the selected period."
+
+  # ════════════════════════════════════════════════════════════
+  # SECTION 8 — DASHBOARD
+  # ════════════════════════════════════════════════════════════
+
+  # Combine all mapvalues widget iterables into one keyed iterable
+  - name: Merge grouped widgets
+    id: grouped_widgets
+    task: groupbykey
+    partial:
+      iterables:
+        - ${{ workflow.illegal_activity_donut_widget.return }}
+        - ${{ workflow.illegal_events_sector_widget.return }}
+        - ${{ workflow.village_proportional_widget.return }}
+        - ${{ workflow.top_villages_category_widget.return }}
+        - ${{ workflow.top_villages_monthly_widget.return }}
+        - ${{ workflow.village_monthly_widget.return }}
+        - ${{ workflow.illegal_events_map_widget.return }}
+        - ${{ workflow.weighted_effort_map_widget.return }}
+        - ${{ workflow.standardized_rate_map_widget.return }}
+        - ${{ workflow.ecograph_map_widget.return }}
+        - ${{ workflow.mangrove_logging_map_widget.return }}
+        - ${{ workflow.poaching_map_widget.return }}
+        - ${{ workflow.illegal_fishing_map_widget.return }}
+        - ${{ workflow.arrests_map_widget.return }}
+        - ${{ workflow.poached_turtles_map_widget.return }}
+
+  # Assemble all widgets into a flat list of GroupedWidgets for the dashboard
+  - name: Assemble dashboard widgets
+    id: dashboard_widgets
+    task: assemble_dashboard_widgets
+    partial:
+      single_view_widgets:
+        - ${{ workflow.patrol_summary_widget.return }}
+        - ${{ workflow.patrols_chart_widget.return }}
+        - ${{ workflow.hours_chart_widget.return }}
+        - ${{ workflow.incidents_chart_widget.return }}
+        - ${{ workflow.village_summary_widget.return }}
+        - ${{ workflow.patrol_effort_widget.return }}
+        - ${{ workflow.patrol_transport_count_widget.return }}
+        - ${{ workflow.patrol_transport_hours_widget.return }}
+        - ${{ workflow.illegal_activity_widget.return }}
+        - ${{ workflow.mangrove_evidence_widget.return }}
+        - ${{ workflow.poaching_evidence_widget.return }}
+        - ${{ workflow.fishing_gear_widget.return }}
+        - ${{ workflow.arrests_village_widget.return }}
+      keyed_widgets: ${{ workflow.grouped_widgets.return }}
+
+  - name: Patrol Summary Dashboard
+    id: patrol_summary_dashboard
+    task: gather_dashboard
+    partial:
+      widgets: ${{ workflow.dashboard_widgets.return }}
+      details: ${{ workflow.workflow_details.return }}  # ← hides Details fields from UI
+      groupers: ${{ workflow.groupers.return }}          # ← hides Groupers fields from UI
+      time_range: ${{ workflow.time_range.return }}      # ← hides Time Range fields from UI
