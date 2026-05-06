@@ -1,4 +1,4 @@
-[project]
+[workspace]
 name = "id: bh_antipoaching"
 channels = [
     # Uncomment the following lines to use local channels for development.
@@ -47,24 +47,3 @@ typing-extensions = ">=4.12.0"
 compile = { features = [
     "compile",
 ], solve-group = "compile", no-default-feature = true }
-
-[tasks]
-[tasks.build-release]
-cmd = './publish/build.sh'
-
-[tasks.pytest-310]
-cmd = './dev/pytest-task.sh 310'
-
-[tasks.pytest-311]
-cmd = './dev/pytest-task.sh 311'
-
-[tasks.pytest-312]
-cmd = './dev/pytest-task.sh 312'
-
-[feature.compile.tasks.compile-patrol-summary]
-cmd = './dev/recompile.sh patrol-summary --install'
-depends-on = ["build-release"]
-
-[feature.compile.tasks.recompile-patrol-summary]
-cmd = './dev/recompile.sh patrol-summary --update'
-depends-on = ["build-release"]
