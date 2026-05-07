@@ -19,6 +19,7 @@ playwright = ">=1.58.1,<2"
 python = "3.12.*"
 typing-extensions = ">=4.12.0"
 hatch-vcs = ">=0.5.0,<0.6"
+pytest = ">=9.0.3,<10"
 
 
 [feature.compile.dependencies]
@@ -47,3 +48,11 @@ typing-extensions = ">=4.12.0"
 compile = { features = [
     "compile",
 ], solve-group = "compile", no-default-feature = true }
+
+[feature.compile.tasks.compile-patrol-summary]
+cmd = './dev/recompile.sh patrol-summary --install'
+depends-on = ["build-release"]
+
+[feature.compile.tasks.recompile-patrol-summary]
+cmd = './dev/recompile.sh patrol-summary --update'
+depends-on = ["build-release"]

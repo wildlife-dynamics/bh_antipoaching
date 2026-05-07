@@ -1006,6 +1006,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/certifi-2026.4.22-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cffi-2.0.0-py312h460c074_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/click-8.3.3-pyhc90fa1f_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/colorama-0.4.6-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cryptography-48.0.0-py312ha4b625e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/curl-8.20.0-hcf29cc6_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dbus-1.16.2-h24cb091_1.conda
@@ -1027,6 +1028,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/idna-3.13-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/importlib-metadata-8.8.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/importlib_resources-7.1.0-pyhd8ed1ab_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/iniconfig-2.3.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/jaraco.classes-3.4.0-pyhcf101f3_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/jaraco.context-6.1.2-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/jaraco.functools-4.4.0-pyhcf101f3_1.conda
@@ -1076,6 +1078,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pycparser-2.22-pyh29332c3_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pyproject_hooks-1.2.0-pyhd8ed1ab_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/pytest-9.0.3-pyhc364b38_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.12.13-hd63d673_0_cpython.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python-discovery-1.3.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.12-8_cp312.conda
@@ -1116,6 +1119,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.4.22-hbd8a1cb_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/certifi-2026.4.22-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/click-8.3.3-pyhc90fa1f_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/colorama-0.4.6-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/curl-8.20.0-hd5a2499_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/distlib-0.4.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/editables-0.6-pyhcf101f3_0.conda
@@ -1135,6 +1139,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/idna-3.13-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/importlib-metadata-8.8.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/importlib_resources-7.1.0-pyhd8ed1ab_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/iniconfig-2.3.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/jaraco.classes-3.4.0-pyhcf101f3_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/jaraco.context-6.1.2-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/jaraco.functools-4.4.0-pyhcf101f3_1.conda
@@ -1172,6 +1177,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ptyprocess-0.7.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pyproject_hooks-1.2.0-pyhd8ed1ab_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/pytest-9.0.3-pyhc364b38_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.12.13-h8561d8f_0_cpython.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python-discovery-1.3.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.12-8_cp312.conda
